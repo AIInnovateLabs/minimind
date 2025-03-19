@@ -1,3 +1,14 @@
+"""
+低秩适配器(LoRA)训练脚本
+此脚本实现了基于LoRA的参数高效微调训练，通过添加小规模的可训练参数来适应新任务
+主要特点：
+1. 仅训练LoRA参数，冻结原始模型参数
+2. 大幅降低训练显存占用和参数量
+3. 支持任务特定的LoRA权重保存和加载
+4. 可用于快速领域适配和个性化训练
+5. 训练参数量仅为原模型的0.1%-1%
+"""
+
 import os
 import platform
 import argparse
@@ -17,18 +28,37 @@ from model.model_lora import *
 warnings.filterwarnings('ignore')
 
 
-# Logger function
 def Logger(content):
+    """
+    日志打印函数，在分布式训练时只在主进程上打印
+    Args:
+        content: 需要打印的内容
+    """
     if not ddp or dist.get_rank() == 0:
         print(content)
 
 
 def get_lr(current_step, total_steps, lr):
+    """
+    获取当前学习率，使用余弦退火策略
+    Args:
+        current_step: 当前步数
+        total_steps: 总步数
+        lr: 初始学习率
+    Returns:
+        当前步数对应的学习率
+    """
     return lr / 10 + 0.5 * lr * (1 + math.cos(math.pi * current_step / total_steps))
 
 
-# 代码和full_sft「几乎」一致
 def train_epoch(epoch, wandb):
+    """
+    训练一个epoch
+    Args:
+        epoch: 当前epoch数
+        wandb: wandb日志工具对象
+    注意：代码和full_sft基本一致，主要区别在于只更新LoRA参数
+    """
     loss_fct = nn.CrossEntropyLoss(reduction='none')
     start_time = time.time()
     for step, (X, Y, loss_mask) in enumerate(train_loader):
@@ -79,12 +109,19 @@ def train_epoch(epoch, wandb):
 
         if (step + 1) % args.save_interval == 0 and (not ddp or dist.get_rank() == 0):
             model.eval()
-            # 【区别1】只保存lora权重即可
             save_lora(model, f'{args.save_dir}/lora/{args.lora_name}_{lm_config.dim}.pth')
             model.train()
 
 
 def init_model(lm_config):
+    """
+    初始化模型
+    Args:
+        lm_config: 模型配置参数
+    Returns:
+        model: 初始化好的模型
+        tokenizer: 分词器
+    """
     tokenizer = AutoTokenizer.from_pretrained('./model/minimind_tokenizer')
     model = MiniMindLM(lm_config)
     moe_path = '_moe' if lm_config.use_moe else ''
@@ -95,6 +132,9 @@ def init_model(lm_config):
 
 
 def init_distributed_mode():
+    """
+    初始化分布式训练环境
+    """
     if not ddp: return
     global ddp_local_rank, DEVICE
 
@@ -173,7 +213,6 @@ if __name__ == "__main__":
         if 'lora' in name:
             lora_params.append(param)
 
-    # 只对 LoRA 参数进行优化
     optimizer = optim.AdamW(lora_params, lr=args.learning_rate)
     train_ds = SFTDataset(args.data_path, tokenizer, max_length=lm_config.max_seq_len)
     train_sampler = DistributedSampler(train_ds) if ddp else None

@@ -1,3 +1,14 @@
+"""
+全参数监督微调(Full-parameter SFT)训练脚本
+此脚本实现了模型的全参数监督微调训练，通过高质量的指令数据来提升模型的任务执行能力
+主要特点：
+1. 更新模型的所有参数进行训练
+2. 使用交叉熵作为基础损失函数
+3. 支持混合精度训练和梯度累积
+4. 采用余弦退火的学习率调度策略
+5. 支持分布式训练加速
+"""
+
 import os
 import platform
 import argparse
@@ -23,15 +34,35 @@ warnings.filterwarnings('ignore')
 
 
 def Logger(content):
+    """
+    日志打印函数，在分布式训练时只在主进程上打印
+    Args:
+        content: 需要打印的内容
+    """
     if not ddp or dist.get_rank() == 0:
         print(content)
 
 
 def get_lr(current_step, total_steps, lr):
+    """
+    获取当前学习率，使用余弦退火策略
+    Args:
+        current_step: 当前步数
+        total_steps: 总步数
+        lr: 初始学习率
+    Returns:
+        当前步数对应的学习率
+    """
     return lr / 10 + 0.5 * lr * (1 + math.cos(math.pi * current_step / total_steps))
 
 
 def train_epoch(epoch, wandb):
+    """
+    训练一个epoch
+    Args:
+        epoch: 当前epoch数
+        wandb: wandb日志工具对象
+    """
     loss_fct = nn.CrossEntropyLoss(reduction='none')
     start_time = time.time()
     for step, (X, Y, loss_mask) in enumerate(train_loader):
@@ -96,6 +127,14 @@ def train_epoch(epoch, wandb):
 
 
 def init_model(lm_config):
+    """
+    初始化模型
+    Args:
+        lm_config: 模型配置参数
+    Returns:
+        model: 初始化好的模型
+        tokenizer: 分词器
+    """
     tokenizer = AutoTokenizer.from_pretrained('./model/minimind_tokenizer')
     model = MiniMindLM(lm_config)
     moe_path = '_moe' if lm_config.use_moe else ''
@@ -108,6 +147,9 @@ def init_model(lm_config):
 
 
 def init_distributed_mode():
+    """
+    初始化分布式训练环境
+    """
     if not ddp: return
     global ddp_local_rank, DEVICE
 
